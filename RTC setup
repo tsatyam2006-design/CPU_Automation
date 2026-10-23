@@ -1,0 +1,64 @@
+#include <Wire.h>
+#include <RTClib.h>
+
+#define RTC_SDA 21
+#define RTC_SCL 22
+
+RTC_DS1307 rtc;
+
+// FIRST UPLOAD: true
+// AFTER SETTING TIME: change to false and upload again
+const bool SET_RTC_TIME = false;
+
+void setup() {
+  Serial.begin(9600);
+  delay(1000);
+
+  Serial.println();
+  Serial.println("================================");
+  Serial.println("   DS1307 RTC TIME SETUP");
+  Serial.println("================================");
+
+  Wire.begin(RTC_SDA, RTC_SCL);
+
+  if (!rtc.begin()) {
+    Serial.println("[ERROR] DS1307 not detected!");
+    Serial.println("Check SDA, SCL, VCC and GND.");
+    while (true) {
+      delay(1000);
+    }
+  }
+
+  Serial.println("[OK] DS1307 detected.");
+
+  if (SET_RTC_TIME) {
+    Serial.println("[INFO] Setting RTC time from compile time...");
+
+    // Sets RTC to the date and time when this sketch was compiled.
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+
+    Serial.println("[OK] RTC time has been set.");
+  } else {
+    Serial.println("[INFO] RTC setting disabled.");
+    Serial.println("Existing RTC time will be preserved.");
+  }
+
+  Serial.println();
+  Serial.println("Current RTC time:");
+}
+
+void loop() {
+  DateTime now = rtc.now();
+
+  Serial.printf(
+    "%04d-%02d-%02d %02d:%02d:%02d\n",
+    now.year(),
+    now.month(),
+    now.day(),
+    now.hour(),
+    now.minute(),
+    now.second()
+  );
+
+  delay(1000);
+}
