@@ -46,11 +46,11 @@
 // ==========================================================
 
 // CURRENT TESTING SCHEDULE
-const int START_HOUR   = 20;
-const int START_MINUTE = 12;
+const int START_HOUR   = 9;
+const int START_MINUTE = 30;
 
-const int STOP_HOUR    = 21;
-const int STOP_MINUTE  = 5;
+const int STOP_HOUR    = 19;
+const int STOP_MINUTE  = 0;
 
 // After testing, change to:
 // START_HOUR   = 9;
