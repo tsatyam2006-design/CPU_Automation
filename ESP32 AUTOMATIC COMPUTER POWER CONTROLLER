@@ -1,31 +1,3 @@
-/*
-  ==========================================================
-       ESP32 AUTOMATIC COMPUTER POWER CONTROLLER
-  ==========================================================
-
-  Board       : ESP32 Dev Module
-  RTC         : HW-111 / DS1307
-  CPU Status  : GPIO 27
-  Power Button: GPIO 23
-  RTC SDA     : GPIO 21
-  RTC SCL     : GPIO 22
-
-  TEST SCHEDULE:
-  START = 20:12
-  STOP  = 21:05
-
-  Behaviour:
-  - Turn PC ON at scheduled start.
-  - During active hours, recover unexpected shutdowns.
-  - Retry every 2 minutes if PC remains OFF.
-  - At stop time, press power button once if PC is ON.
-  - Wait for PC to turn OFF.
-  - Enter deep sleep until the next start time.
-
-  IMPORTANT:
-  RTC time is NOT reset by this program.
-*/
-
 #include <Wire.h>
 #include <RTClib.h>
 #include <Preferences.h>
