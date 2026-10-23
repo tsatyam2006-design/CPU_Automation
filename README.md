@@ -31,7 +31,7 @@ IMPORTANT:
 | --- | --- |
 | Collector (C) | PowerSW Button Pin A (3.3 V) |
 | Emitter (E) | PowerSW GND (Button Pin B) |
-| CPU USB 5V to ESP32 | Used voltage divider in the line |
+| Base (B) | through 1kΩ to GPIO 23 |
 
 
 
