@@ -19,7 +19,7 @@ Conection of 2N2222A transistor:
                      |
                    1 kΩ
                      |
-                  Base (B) 2N2222A  
+                  Base (B) 2N2222A
 
 Collector (C) ----------------> UPS Button Pin A (3.3 V)
 
