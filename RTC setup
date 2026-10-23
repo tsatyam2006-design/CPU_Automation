@@ -8,7 +8,7 @@ RTC_DS1307 rtc;
 
 // FIRST UPLOAD: true
 // AFTER SETTING TIME: change to false and upload again
-const bool SET_RTC_TIME = false;
+const bool SET_RTC_TIME = true;
 
 void setup() {
   Serial.begin(9600);
