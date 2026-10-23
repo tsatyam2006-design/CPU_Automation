@@ -1,4 +1,15 @@
-# printer-automation
+### ESP32 AUTOMATIC COMPUTER POWER CONTROLLER
+
+Behaviour:
+  - Turn PC ON at scheduled start.
+  - During active hours, recover unexpected shutdowns.
+  - Retry every 2 minutes if PC remains OFF.
+  - At stop time, press power button once if PC is ON.
+  - Wait for PC to turn OFF.
+  - Enter deep sleep until the next start time.
+
+IMPORTANT:
+  RTC time is NOT reset by this program.
 
 
 ### Connection Wiring:
