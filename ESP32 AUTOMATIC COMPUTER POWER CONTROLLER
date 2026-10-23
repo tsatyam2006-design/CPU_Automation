@@ -1,0 +1,627 @@
+/*
+  ==========================================================
+       ESP32 AUTOMATIC COMPUTER POWER CONTROLLER
+  ==========================================================
+
+  Board       : ESP32 Dev Module
+  RTC         : HW-111 / DS1307
+  CPU Status  : GPIO 27
+  Power Button: GPIO 23
+  RTC SDA     : GPIO 21
+  RTC SCL     : GPIO 22
+
+  TEST SCHEDULE:
+  START = 20:12
+  STOP  = 21:05
+
+  Behaviour:
+  - Turn PC ON at scheduled start.
+  - During active hours, recover unexpected shutdowns.
+  - Retry every 2 minutes if PC remains OFF.
+  - At stop time, press power button once if PC is ON.
+  - Wait for PC to turn OFF.
+  - Enter deep sleep until the next start time.
+
+  IMPORTANT:
+  RTC time is NOT reset by this program.
+*/
+
+#include <Wire.h>
+#include <RTClib.h>
+#include <Preferences.h>
+#include <esp_sleep.h>
+
+// ==========================================================
+// PIN CONFIGURATION
+// ==========================================================
+
+#define RTC_SDA_PIN       21
+#define RTC_SCL_PIN       22
+
+#define CPU_STATUS_PIN    27
+#define POWER_BUTTON_PIN  23
+
+// ==========================================================
+// SCHEDULE
+// ==========================================================
+
+// CURRENT TESTING SCHEDULE
+const int START_HOUR   = 20;
+const int START_MINUTE = 12;
+
+const int STOP_HOUR    = 21;
+const int STOP_MINUTE  = 5;
+
+// After testing, change to:
+// START_HOUR   = 9;
+// START_MINUTE = 30;
+// STOP_HOUR    = 19;
+// STOP_MINUTE  = 0;
+
+// ==========================================================
+// TIMING CONFIGURATION
+// ==========================================================
+
+const uint32_t BUTTON_PRESS_MS = 300;
+
+const uint32_t RETRY_INTERVAL_SECONDS = 120;
+
+const uint32_t STATUS_CHECK_MS = 500;
+
+// ==========================================================
+// OBJECTS
+// ==========================================================
+
+RTC_DS1307 rtc;
+Preferences preferences;
+
+// ==========================================================
+// STATE VARIABLES
+// ==========================================================
+
+uint32_t lastButtonAttemptEpoch = 0;
+uint32_t offSinceEpoch = 0;
+
+bool rtcReady = false;
+
+// ==========================================================
+// DATE/TIME HELPERS
+// ==========================================================
+
+uint32_t getDateKey(const DateTime &now) {
+  return (uint32_t)now.year() * 10000UL
+       + (uint32_t)now.month() * 100UL
+       + (uint32_t)now.day();
+}
+
+int getMinutesOfDay(const DateTime &now) {
+  return now.hour() * 60 + now.minute();
+}
+
+int getStartMinutes() {
+  return START_HOUR * 60 + START_MINUTE;
+}
+
+int getStopMinutes() {
+  return STOP_HOUR * 60 + STOP_MINUTE;
+}
+
+void printDateTime(const DateTime &now) {
+  Serial.printf(
+    "%04d-%02d-%02d %02d:%02d:%02d",
+    now.year(),
+    now.month(),
+    now.day(),
+    now.hour(),
+    now.minute(),
+    now.second()
+  );
+}
+
+// ==========================================================
+// CPU STATUS
+// GPIO27 HIGH = COMPUTER ON
+// GPIO27 LOW  = COMPUTER OFF
+// ==========================================================
+
+bool isComputerOn() {
+  return digitalRead(CPU_STATUS_PIN) == HIGH;
+}
+
+void printComputerStatus() {
+  if (isComputerOn()) {
+    Serial.println("[CPU] COMPUTER ON");
+  } else {
+    Serial.println("[CPU] COMPUTER OFF");
+  }
+}
+
+// ==========================================================
+// POWER BUTTON
+// ==========================================================
+
+void pressPowerButton() {
+  Serial.println();
+  Serial.println("[BUTTON] Pressing power button...");
+
+  digitalWrite(POWER_BUTTON_PIN, HIGH);
+  delay(BUTTON_PRESS_MS);
+  digitalWrite(POWER_BUTTON_PIN, LOW);
+
+  DateTime now = rtc.now();
+
+  lastButtonAttemptEpoch = now.unixtime();
+
+  preferences.putUInt(
+    "lastAttempt",
+    lastButtonAttemptEpoch
+  );
+
+  Serial.println("[BUTTON] Released.");
+}
+
+// ==========================================================
+// RTC VALIDATION
+// ==========================================================
+
+bool initializeRTC() {
+  Wire.begin(RTC_SDA_PIN, RTC_SCL_PIN);
+
+  if (!rtc.begin()) {
+    Serial.println("[ERROR] DS1307 not detected!");
+    return false;
+  }
+
+  if (!rtc.isrunning()) {
+    Serial.println("[ERROR] RTC clock is not running!");
+    Serial.println("[ERROR] Check RTC backup battery.");
+    return false;
+  }
+
+  DateTime now = rtc.now();
+
+  if (now.year() < 2025) {
+    Serial.println("[ERROR] RTC date appears incorrect!");
+    Serial.println("[ERROR] Set RTC time using the setup sketch.");
+    return false;
+  }
+
+  Serial.print("[RTC] Current time: ");
+  printDateTime(now);
+  Serial.println();
+
+  return true;
+}
+
+// ==========================================================
+// COMPUTER START LOGIC
+// ==========================================================
+
+void handleComputerStart() {
+
+  DateTime now = rtc.now();
+
+  uint32_t today = getDateKey(now);
+
+  uint32_t startDay = preferences.getUInt(
+    "startDay",
+    0
+  );
+
+  bool computerOn = isComputerOn();
+
+  // First scheduled start handling for this date.
+  if (startDay != today) {
+
+    Serial.println();
+    Serial.println("[START] Today's start schedule is being handled.");
+
+    preferences.putUInt("startDay", today);
+
+    if (computerOn) {
+
+      Serial.println("[START] Computer is already ON.");
+
+      offSinceEpoch = 0;
+      preferences.putUInt("offSince", 0);
+
+    } else {
+
+      Serial.println("[START] Computer is OFF.");
+      Serial.println("[START] Sending power button pulse.");
+
+      offSinceEpoch = 0;
+      preferences.putUInt("offSince", 0);
+
+      pressPowerButton();
+
+      delay(1500);
+
+      if (isComputerOn()) {
+        Serial.println("[START] Computer ON detected.");
+      } else {
+        Serial.println("[START] Computer is still OFF.");
+        Serial.println("[START] Will retry after 2 minutes.");
+      }
+    }
+
+    return;
+  }
+
+  // Computer is already ON.
+  if (computerOn) {
+
+    if (offSinceEpoch != 0) {
+      Serial.println("[RECOVERY] Computer is ON again.");
+    }
+
+    offSinceEpoch = 0;
+    preferences.putUInt("offSince", 0);
+
+    return;
+  }
+
+  // Computer is OFF during scheduled working hours.
+  now = rtc.now();
+
+  uint32_t currentEpoch = now.unixtime();
+
+  if (offSinceEpoch == 0) {
+
+    offSinceEpoch = currentEpoch;
+
+    preferences.putUInt(
+      "offSince",
+      offSinceEpoch
+    );
+
+    Serial.println();
+    Serial.println("[RECOVERY] Computer OFF detected.");
+    Serial.println("[RECOVERY] Waiting 2 minutes before retry.");
+
+    return;
+  }
+
+  // Avoid retrying too soon after the previous button press.
+  if (lastButtonAttemptEpoch != 0 &&
+      currentEpoch >= lastButtonAttemptEpoch &&
+      currentEpoch - lastButtonAttemptEpoch <
+        RETRY_INTERVAL_SECONDS) {
+
+    return;
+  }
+
+  // Wait 2 minutes after detecting an unexpected OFF state.
+  if (currentEpoch >= offSinceEpoch &&
+      currentEpoch - offSinceEpoch >=
+        RETRY_INTERVAL_SECONDS) {
+
+    Serial.println();
+    Serial.println("[RECOVERY] Retry interval completed.");
+
+    pressPowerButton();
+
+    delay(1500);
+
+    if (isComputerOn()) {
+
+      Serial.println("[RECOVERY] Computer ON detected.");
+
+      offSinceEpoch = 0;
+      preferences.putUInt("offSince", 0);
+
+    } else {
+
+      Serial.println("[RECOVERY] Computer remains OFF.");
+      Serial.println("[RECOVERY] Another retry will occur in 2 minutes.");
+    }
+  }
+}
+
+// ==========================================================
+// COMPUTER STOP LOGIC WITH 2-MINUTE RETRIES
+// ==========================================================
+
+void handleComputerStop() {
+
+  Serial.println();
+  Serial.println("[STOP] Scheduled stop time reached.");
+
+  // If computer is already OFF, go directly to sleep.
+  if (!isComputerOn()) {
+
+    Serial.println("[STOP] Computer is already OFF.");
+    Serial.println("[STOP] Entering deep sleep.");
+
+    enterSleepUntilNextStart();
+    return;
+  }
+
+  // Computer is ON: keep trying until it turns OFF.
+  while (true) {
+
+    // Check whether computer has turned OFF.
+    if (!isComputerOn()) {
+
+      Serial.println();
+      Serial.println("[STOP] COMPUTER OFF detected!");
+      Serial.println("[STOP] Shutdown confirmed.");
+      Serial.println("[STOP] Entering deep sleep.");
+
+      enterSleepUntilNextStart();
+      return;
+    }
+
+    // Press the power button once.
+    Serial.println();
+    Serial.println("[STOP] Pressing power button for 300 ms.");
+
+    pressPowerButton();
+
+    // Wait up to 2 minutes for the computer to turn OFF.
+    Serial.println(
+      "[STOP] Waiting up to 2 minutes for computer to turn OFF..."
+    );
+
+    uint32_t waitStart = millis();
+
+    while (millis() - waitStart < 120000UL) {
+
+      if (!isComputerOn()) {
+
+        Serial.println();
+        Serial.println("[STOP] COMPUTER OFF detected!");
+        Serial.println("[STOP] Shutdown confirmed.");
+        Serial.println("[STOP] Entering deep sleep.");
+
+        enterSleepUntilNextStart();
+        return;
+      }
+
+      delay(STATUS_CHECK_MS);
+    }
+
+    // Computer did not turn OFF within 2 minutes.
+    Serial.println();
+    Serial.println("[STOP] 2-minute timeout reached.");
+    Serial.println("[STOP] Computer is still ON.");
+    Serial.println("[STOP] Retrying power button.");
+  }
+}
+// ==========================================================
+// DEEP SLEEP
+// ==========================================================
+
+void sleepUntilTimestamp(uint32_t targetEpoch) {
+
+  DateTime now = rtc.now();
+
+  uint32_t currentEpoch = now.unixtime();
+
+  if (targetEpoch <= currentEpoch) {
+    return;
+  }
+
+  uint32_t sleepSeconds = targetEpoch - currentEpoch;
+
+  Serial.println();
+  Serial.println("[SLEEP] Preparing deep sleep.");
+
+  Serial.print("[SLEEP] Current RTC time: ");
+  printDateTime(now);
+  Serial.println();
+
+  DateTime target(
+    targetEpoch
+  );
+
+  Serial.print("[SLEEP] Target wake time: ");
+  printDateTime(target);
+  Serial.println();
+
+  Serial.printf(
+    "[SLEEP] Sleeping for %lu seconds.\n",
+    (unsigned long)sleepSeconds
+  );
+
+  Serial.flush();
+
+  esp_sleep_enable_timer_wakeup(
+    (uint64_t)sleepSeconds * 1000000ULL
+  );
+
+  esp_deep_sleep_start();
+}
+
+void enterSleepUntilNextStart() {
+
+  DateTime now = rtc.now();
+
+  DateTime todayStart(
+    now.year(),
+    now.month(),
+    now.day(),
+    START_HOUR,
+    START_MINUTE,
+    0
+  );
+
+  DateTime nextStart;
+
+  if (now.unixtime() < todayStart.unixtime()) {
+
+    nextStart = todayStart;
+
+  } else {
+
+    nextStart =
+      DateTime(
+        now.year(),
+        now.month(),
+        now.day(),
+        0, 0, 0
+      )
+      + TimeSpan(
+        1,
+        START_HOUR,
+        START_MINUTE,
+        0
+      );
+  }
+
+  sleepUntilTimestamp(nextStart.unixtime());
+}
+
+// ==========================================================
+// SETUP
+// ==========================================================
+
+void setup() {
+
+  Serial.begin(9600);
+
+  delay(1000);
+
+  Serial.println();
+  Serial.println("================================================");
+  Serial.println("   ESP32 AUTOMATIC COMPUTER POWER CONTROLLER");
+  Serial.println("================================================");
+
+  // Keep transistor output LOW at startup.
+  pinMode(POWER_BUTTON_PIN, OUTPUT);
+  digitalWrite(POWER_BUTTON_PIN, LOW);
+
+  // USB sensing divider:
+  // USB 5V -> 1k resistor -> GPIO27 junction
+  // GPIO27 junction -> 2k resistor -> GND
+  pinMode(CPU_STATUS_PIN, INPUT_PULLDOWN);
+
+  preferences.begin("computer", false);
+
+  rtcReady = initializeRTC();
+
+  if (!rtcReady) {
+
+    Serial.println("[FATAL] Controller stopped.");
+    Serial.println("[FATAL] Check RTC wiring and backup battery.");
+
+    while (true) {
+      digitalWrite(POWER_BUTTON_PIN, LOW);
+      delay(1000);
+    }
+  }
+
+  lastButtonAttemptEpoch = preferences.getUInt(
+    "lastAttempt",
+    0
+  );
+
+  offSinceEpoch = preferences.getUInt(
+    "offSince",
+    0
+  );
+
+  DateTime now = rtc.now();
+
+  int currentMinutes = getMinutesOfDay(now);
+
+  Serial.println();
+  Serial.println("[CONFIG] Start time:");
+
+  Serial.printf(
+    "%02d:%02d\n",
+    START_HOUR,
+    START_MINUTE
+  );
+
+  Serial.println("[CONFIG] Stop time:");
+
+  Serial.printf(
+    "%02d:%02d\n",
+    STOP_HOUR,
+    STOP_MINUTE
+  );
+
+  printComputerStatus();
+
+  // Before the start time: sleep until today's start.
+  if (currentMinutes < getStartMinutes()) {
+
+    Serial.println();
+    Serial.println("[INFO] Before scheduled start time.");
+
+    DateTime todayStart(
+      now.year(),
+      now.month(),
+      now.day(),
+      START_HOUR,
+      START_MINUTE,
+      0
+    );
+
+    sleepUntilTimestamp(todayStart.unixtime());
+
+    return;
+  }
+
+  // At or after the stop time: handle shutdown.
+  if (currentMinutes >= getStopMinutes()) {
+
+    handleComputerStop();
+
+    return;
+  }
+
+  // We are within the active working period.
+  Serial.println();
+  Serial.println("[INFO] Inside scheduled working hours.");
+
+  handleComputerStart();
+}
+
+// ==========================================================
+// MAIN LOOP
+// ==========================================================
+
+void loop() {
+
+  DateTime now = rtc.now();
+
+  int currentMinutes = getMinutesOfDay(now);
+
+  Serial.print("[MONITOR] ");
+  printDateTime(now);
+  Serial.print(" | ");
+
+  printComputerStatus();
+
+  // Stop time reached.
+  if (currentMinutes >= getStopMinutes()) {
+
+    handleComputerStop();
+
+    return;
+  }
+
+  // Before the scheduled start.
+  if (currentMinutes < getStartMinutes()) {
+
+    DateTime todayStart(
+      now.year(),
+      now.month(),
+      now.day(),
+      START_HOUR,
+      START_MINUTE,
+      0
+    );
+
+    sleepUntilTimestamp(todayStart.unixtime());
+
+    return;
+  }
+
+  // During active hours, manage PC recovery.
+  handleComputerStart();
+
+  delay(STATUS_CHECK_MS);
+}
