@@ -45,3 +45,16 @@ Connection of CPU USB 5V to esp32:
                   2KΩ resistor 
                       |
                       GND
+
+
+## RTC Time Configuration
+``` To set the time on the DS1307 RTC module, follow these steps:
+1. In the code, set the SET_RTC_TIME constant to true.
+2. Upload the code to your board. This will configure the RTC with the current time from your computer.
+3. After the upload is complete, change the SET_RTC_TIME constant back to false.
+4. Upload the code again. This prevents the time from being reset if the board restarts.
+```
+
+# Note:
+
+Do not remove the coin cell battery from the RTC module after this setup, otherwise the time will be reset.
