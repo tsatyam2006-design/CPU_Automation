@@ -1,25 +1,26 @@
-### ESP32 AUTOMATIC COMPUTER POWER CONTROLLER
+# ESP32 AUTOMATIC COMPUTER POWER CONTROLLER
 
-🧰 Components Required
+### 🧰 Components Required
 
-1	ESP32 Dev Module
+1.	ESP32 Dev Module
 
-2	HW-111 DS1307 RTC Module
+2.	HW-111 DS1307 RTC Module
 
-3	CR2032 coin-cell battery
+3.	CR2032 coin-cell battery
 
-4	2N2222 NPN Transistor
+4.	2N2222 NPN Transistor
 
-5	1 kΩ Resistor
+5.	1 kΩ Resistor
 
-6	2 kΩ Resistor
+6.	2 kΩ Resistor
 
-7	Computer with an available USB port
+7.	Computer with an available USB port
 
-8	Suitable ESP32 power supply
+8.	Suitable ESP32 power supply
 
 
-Behaviour:
+
+### Behaviour:
   - Turn PC ON at scheduled start.
   - During active hours, recover unexpected shutdowns.
   - Retry every 2 minutes if PC remains OFF.
